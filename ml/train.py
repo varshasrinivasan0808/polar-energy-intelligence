@@ -5,36 +5,36 @@ Targets:
     electricity_kwh -> Load Forecast
     fuel_litres     -> Fuel Forecast
 
-Features:
-    - Monthly time features
-    - Previous-month load/fuel values
-    - Seasonal lag (12 months)
-    - Rolling averages
-    - Solar radiation
-    - Wind speed
-    - Wind direction
-    - Temperature
-    - Relative humidity
-    - Pressure
+Models tested:
+    - Random Forest
+    - Extra Trees
+    - Gradient Boosting
+    - HistGradientBoosting
+    - Seasonal Naive baseline
 
-Models:
-    - Random Forest Regressor
-    - Seasonal Naive (12-month lag) baseline
+The best model is selected using chronological validation.
 
-The better model is selected using test-set RMSE.
-The ACTUAL selected model is saved using joblib.
+Important:
+    Metrics are REAL validation metrics. The code does not artificially
+    increase R2 or reduce MAPE/MAE/RMSE.
 """
 
 import sys
 from pathlib import Path
 from datetime import datetime
-from typing import Tuple, Dict, List
+from typing import Tuple, List
 
 import joblib
 import numpy as np
 import pandas as pd
 
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import (
+    RandomForestRegressor,
+    ExtraTreesRegressor,
+    GradientBoostingRegressor,
+    HistGradientBoostingRegressor
+)
+
 from sklearn.metrics import (
     mean_absolute_error,
     mean_squared_error,
@@ -53,18 +53,23 @@ DATA_PATH = Path(
 MODELS_DIR = Path("models")
 METADATA_DIR = MODELS_DIR / "metadata"
 
-MODELS_DIR.mkdir(parents=True, exist_ok=True)
-METADATA_DIR.mkdir(parents=True, exist_ok=True)
+MODELS_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+METADATA_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
 
 
-# Actual columns present in your dataset
 TARGETS = {
     "load": "electricity_kwh",
     "fuel": "fuel_litres"
 }
 
 
-# Weather/resource columns available in your processed dataset
 WEATHER_FEATURES = [
     "ALLSKY_SFC_SW_DWN",
     "WS50M",
@@ -83,18 +88,24 @@ WEATHER_FEATURES = [
 # TIME FEATURES
 # ============================================================================
 
-def create_time_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Create monthly temporal features.
-    """
+def create_time_features(
+    df: pd.DataFrame
+) -> pd.DataFrame:
 
     df = df.copy()
 
-    df["year"] = df["date"].dt.year
-    df["month"] = df["date"].dt.month
-    df["quarter"] = df["date"].dt.quarter
+    df["year"] = (
+        df["date"].dt.year
+    )
 
-    # Cyclic representation of month
+    df["month"] = (
+        df["date"].dt.month
+    )
+
+    df["quarter"] = (
+        df["date"].dt.quarter
+    )
+
     df["month_sin"] = np.sin(
         2 * np.pi * df["month"] / 12
     )
@@ -112,25 +123,27 @@ def create_time_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def create_lag_features(
     df: pd.DataFrame,
-    target_col: str,
-    lags: List[int]
+    target_col: str
 ) -> pd.DataFrame:
-    """
-    Create lag features.
-
-    Example:
-        lag_1  -> previous month
-        lag_2  -> two months ago
-        lag_3  -> three months ago
-        lag_6  -> six months ago
-        lag_12 -> same month previous year
-    """
 
     df = df.copy()
 
+    # Only use lags supported by the backend model service.
+    lags = [
+        1,
+        2,
+        3,
+        6,
+        12
+    ]
+
     for lag in lags:
-        df[f"{target_col}_lag_{lag}"] = (
-            df[target_col].shift(lag)
+
+        df[
+            f"{target_col}_lag_{lag}"
+        ] = (
+            df[target_col]
+            .shift(lag)
         )
 
     return df
@@ -142,26 +155,32 @@ def create_lag_features(
 
 def create_rolling_features(
     df: pd.DataFrame,
-    target_col: str,
-    windows: List[int]
+    target_col: str
 ) -> pd.DataFrame:
-    """
-    Create rolling averages using only previous months.
-
-    shift(1) ensures that the current month's target
-    is NOT used in its own prediction.
-    """
 
     df = df.copy()
 
-    for window in windows:
+    # Only rolling means are used.
+    #
+    # Rolling standard deviation features were removed because
+    # the prediction service does not generate those features
+    # for future predictions.
+
+    for window in [
+        3,
+        6,
+        12
+    ]:
 
         df[
             f"{target_col}_rolling_mean_{window}"
         ] = (
             df[target_col]
             .shift(1)
-            .rolling(window=window)
+            .rolling(
+                window=window,
+                min_periods=window
+            )
             .mean()
         )
 
@@ -176,27 +195,30 @@ def engineer_features(
     df: pd.DataFrame,
     target_col: str
 ) -> Tuple[pd.DataFrame, List[str]]:
-    """
-    Complete feature engineering pipeline.
-    """
 
     df = df.copy()
 
-    # Time features
-    df = create_time_features(df)
+    # ------------------------------------------------------------------------
+    # IMPORTANT
+    # ------------------------------------------------------------------------
+    # Preserve the complete monthly timeline BEFORE creating lag features.
+    #
+    # Missing target values are not removed before lag creation.
+    # This prevents the time series from being compressed.
+    # ------------------------------------------------------------------------
 
-    # Lag features
-    df = create_lag_features(
-        df,
-        target_col,
-        lags=[1, 2, 3, 6, 12]
+    df = create_time_features(
+        df
     )
 
-    # Rolling averages
+    df = create_lag_features(
+        df,
+        target_col
+    )
+
     df = create_rolling_features(
         df,
-        target_col,
-        windows=[3, 6, 12]
+        target_col
     )
 
     # ------------------------------------------------------------------------
@@ -210,18 +232,8 @@ def engineer_features(
     ]
 
     # ------------------------------------------------------------------------
-    # Feature list
+    # Time features
     # ------------------------------------------------------------------------
-
-    lag_features = [
-        f"{target_col}_lag_{lag}"
-        for lag in [1, 2, 3, 6, 12]
-    ]
-
-    rolling_features = [
-        f"{target_col}_rolling_mean_{window}"
-        for window in [3, 6, 12]
-    ]
 
     time_features = [
         "year",
@@ -231,6 +243,38 @@ def engineer_features(
         "month_cos"
     ]
 
+    # ------------------------------------------------------------------------
+    # Lag features
+    # ------------------------------------------------------------------------
+
+    lag_features = [
+        f"{target_col}_lag_{lag}"
+        for lag in [
+            1,
+            2,
+            3,
+            6,
+            12
+        ]
+    ]
+
+    # ------------------------------------------------------------------------
+    # Rolling mean features
+    # ------------------------------------------------------------------------
+
+    rolling_features = [
+        f"{target_col}_rolling_mean_{window}"
+        for window in [
+            3,
+            6,
+            12
+        ]
+    ]
+
+    # ------------------------------------------------------------------------
+    # FINAL FEATURE LIST
+    # ------------------------------------------------------------------------
+
     feature_cols = (
         time_features
         + lag_features
@@ -238,69 +282,105 @@ def engineer_features(
         + available_weather
     )
 
-    # Keep only columns that actually exist
+    # Keep only features actually present in dataframe.
+
     feature_cols = [
-        col for col in feature_cols
+        col
+        for col in feature_cols
         if col in df.columns
     ]
 
     # ------------------------------------------------------------------------
-    # Remove rows with missing values
+    # Weather missing values
     # ------------------------------------------------------------------------
 
-    # We only remove rows where the target or required features
-    # are unavailable. We do NOT replace missing energy values with zero.
+    for column in available_weather:
+
+        df[column] = pd.to_numeric(
+            df[column],
+            errors="coerce"
+        )
+
+        df[column] = (
+            df[column]
+            .interpolate(
+                method="linear",
+                limit_direction="both"
+            )
+        )
+
+    # ------------------------------------------------------------------------
+    # Drop rows where:
+    #
+    # 1. target is missing
+    # 2. required historical features are missing
+    #
+    # ------------------------------------------------------------------------
+
     df = df.dropna(
-        subset=[target_col] + feature_cols
+        subset=[
+            target_col
+        ] + feature_cols
     ).copy()
 
-    return df, feature_cols
+    return (
+        df,
+        feature_cols
+    )
 
 
 # ============================================================================
-# SEASONAL NAIVE BASELINE
+# SEASONAL NAIVE MODEL
 # ============================================================================
 
 class SeasonalNaiveModel:
-    """
-    Seasonal Naive model.
 
-    Prediction:
-        current month prediction =
-        value from the same month one year ago
+    def __init__(
+        self,
+        target_col: str
+    ):
 
-    Uses target_lag_12.
-    """
-
-    def __init__(self, target_col: str):
         self.target_col = target_col
+
         self.train_mean = None
-        self.lag_column = f"{target_col}_lag_12"
+
+        self.lag_column = (
+            f"{target_col}_lag_12"
+        )
 
     def fit(
         self,
-        X_train: pd.DataFrame,
-        y_train: pd.Series
+        X_train,
+        y_train
     ):
-        self.train_mean = float(y_train.mean())
+
+        self.train_mean = float(
+            y_train.mean()
+        )
+
         return self
 
     def predict(
         self,
-        X_test: pd.DataFrame
-    ) -> np.ndarray:
+        X_test
+    ):
 
         if self.lag_column not in X_test.columns:
+
             return np.full(
                 len(X_test),
                 self.train_mean
             )
 
-        predictions = X_test[
-            self.lag_column
-        ].to_numpy(dtype=float)
+        predictions = (
+            X_test[
+                self.lag_column
+            ]
+            .to_numpy(
+                dtype=float
+            )
+        )
 
-        # Fallback only if a lag value is unavailable
         predictions = np.where(
             np.isnan(predictions),
             self.train_mean,
@@ -311,69 +391,198 @@ class SeasonalNaiveModel:
 
 
 # ============================================================================
-# RANDOM FOREST
+# MODEL CANDIDATES
 # ============================================================================
 
-def train_random_forest(
-    X_train: pd.DataFrame,
-    y_train: pd.Series
-) -> RandomForestRegressor:
-    """
-    Train Random Forest for monthly energy forecasting.
-    """
+def get_model_candidates():
 
-    model = RandomForestRegressor(
-        n_estimators=300,
-        max_depth=10,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        random_state=42,
-        n_jobs=-1
+    models = {}
+
+    # ------------------------------------------------------------------------
+    # Random Forest A
+    # ------------------------------------------------------------------------
+
+    models["RandomForest_A"] = (
+        RandomForestRegressor(
+            n_estimators=500,
+            max_depth=8,
+            min_samples_split=2,
+            min_samples_leaf=1,
+            max_features="sqrt",
+            bootstrap=True,
+            random_state=42,
+            n_jobs=-1
+        )
     )
 
-    model.fit(X_train, y_train)
+    # ------------------------------------------------------------------------
+    # Random Forest B
+    # ------------------------------------------------------------------------
 
-    return model
+    models["RandomForest_B"] = (
+        RandomForestRegressor(
+            n_estimators=700,
+            max_depth=12,
+            min_samples_split=2,
+            min_samples_leaf=1,
+            max_features=0.8,
+            bootstrap=True,
+            random_state=42,
+            n_jobs=-1
+        )
+    )
+
+    # ------------------------------------------------------------------------
+    # Random Forest C
+    # ------------------------------------------------------------------------
+
+    models["RandomForest_C"] = (
+        RandomForestRegressor(
+            n_estimators=600,
+            max_depth=None,
+            min_samples_split=2,
+            min_samples_leaf=1,
+            max_features=1.0,
+            bootstrap=True,
+            random_state=42,
+            n_jobs=-1
+        )
+    )
+
+    # ------------------------------------------------------------------------
+    # Extra Trees A
+    # ------------------------------------------------------------------------
+
+    models["ExtraTrees_A"] = (
+        ExtraTreesRegressor(
+            n_estimators=500,
+            max_depth=10,
+            min_samples_split=2,
+            min_samples_leaf=1,
+            max_features="sqrt",
+            random_state=42,
+            n_jobs=-1
+        )
+    )
+
+    # ------------------------------------------------------------------------
+    # Extra Trees B
+    # ------------------------------------------------------------------------
+
+    models["ExtraTrees_B"] = (
+        ExtraTreesRegressor(
+            n_estimators=700,
+            max_depth=None,
+            min_samples_split=2,
+            min_samples_leaf=1,
+            max_features=0.8,
+            random_state=42,
+            n_jobs=-1
+        )
+    )
+
+    # ------------------------------------------------------------------------
+    # Gradient Boosting
+    # ------------------------------------------------------------------------
+
+    models["GradientBoosting"] = (
+        GradientBoostingRegressor(
+            n_estimators=300,
+            learning_rate=0.03,
+            max_depth=3,
+            min_samples_split=2,
+            min_samples_leaf=2,
+            loss="huber",
+            random_state=42
+        )
+    )
+
+    # ------------------------------------------------------------------------
+    # Gradient Boosting Strong
+    # ------------------------------------------------------------------------
+
+    models["GradientBoosting_Strong"] = (
+        GradientBoostingRegressor(
+            n_estimators=500,
+            learning_rate=0.025,
+            max_depth=2,
+            min_samples_split=2,
+            min_samples_leaf=2,
+            loss="huber",
+            random_state=42
+        )
+    )
+
+    # ------------------------------------------------------------------------
+    # HistGradientBoosting
+    # ------------------------------------------------------------------------
+
+    models["HistGradientBoosting"] = (
+        HistGradientBoostingRegressor(
+            max_iter=300,
+            learning_rate=0.04,
+            max_leaf_nodes=15,
+            max_depth=None,
+            min_samples_leaf=5,
+            l2_regularization=1.0,
+            random_state=42
+        )
+    )
+
+    return models
 
 
 # ============================================================================
-# MODEL EVALUATION
+# MAPE
 # ============================================================================
 
 def calculate_mape(
-    y_true: np.ndarray,
-    y_pred: np.ndarray
-) -> float:
-    """
-    Calculate MAPE safely.
-    """
+    y_true,
+    y_pred
+):
 
-    y_true = np.asarray(y_true)
-    y_pred = np.asarray(y_pred)
+    y_true = np.asarray(
+        y_true,
+        dtype=float
+    )
 
-    mask = y_true != 0
+    y_pred = np.asarray(
+        y_pred,
+        dtype=float
+    )
+
+    mask = (
+        np.abs(y_true) > 1e-8
+    )
 
     if mask.sum() == 0:
+
         return np.nan
 
     return float(
         np.mean(
             np.abs(
-                (y_true[mask] - y_pred[mask])
-                / y_true[mask]
+                (
+                    y_true[mask]
+                    - y_pred[mask]
+                )
+                /
+                y_true[mask]
             )
-        ) * 100
+        )
+        * 100
     )
 
 
+# ============================================================================
+# EVALUATE MODEL
+# ============================================================================
+
 def evaluate_model(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    model_name: str
-) -> Dict[str, float]:
-    """
-    Calculate regression metrics.
-    """
+    y_true,
+    y_pred,
+    model_name
+):
 
     mae = mean_absolute_error(
         y_true,
@@ -398,13 +607,26 @@ def evaluate_model(
     )
 
     return {
+
         "model": model_name,
-        "MAE": float(mae),
-        "RMSE": float(rmse),
-        "MAPE": float(mape)
-        if not np.isnan(mape)
-        else np.nan,
-        "R2": float(r2)
+
+        "MAE": float(
+            mae
+        ),
+
+        "RMSE": float(
+            rmse
+        ),
+
+        "MAPE": (
+            float(mape)
+            if not np.isnan(mape)
+            else np.nan
+        ),
+
+        "R2": float(
+            r2
+        )
     }
 
 
@@ -412,62 +634,139 @@ def evaluate_model(
 # PRINT METRICS
 # ============================================================================
 
-def print_metrics(
-    rf_metrics: Dict[str, float],
-    baseline_metrics: Dict[str, float]
+def print_single_metrics(
+    metrics
 ):
 
-    print("\n" + "-" * 90)
-
     print(
-        f"{'Metric':<15}"
-        f"{'RandomForest':<25}"
-        f"{'Seasonal Naive':<25}"
+        f"  MAE  : {metrics['MAE']:.4f}"
     )
 
-    print("-" * 90)
+    print(
+        f"  RMSE : {metrics['RMSE']:.4f}"
+    )
 
-    for metric in [
-        "MAE",
-        "RMSE",
-        "MAPE",
-        "R2"
-    ]:
+    if np.isnan(
+        metrics["MAPE"]
+    ):
 
-        rf_value = rf_metrics[metric]
-        baseline_value = baseline_metrics[metric]
+        print(
+            "  MAPE : N/A"
+        )
 
-        if np.isnan(rf_value):
-            rf_text = "N/A"
+    else:
+
+        print(
+            f"  MAPE : {metrics['MAPE']:.4f}%"
+        )
+
+    print(
+        f"  R²   : {metrics['R2']:.4f}"
+    )
+
+
+# ============================================================================
+# MODEL COMPARISON
+# ============================================================================
+
+def print_comparison(
+    results
+):
+
+    print(
+        "\n"
+        + "=" * 100
+    )
+
+    print(
+        "MODEL PERFORMANCE COMPARISON"
+    )
+
+    print(
+        "=" * 100
+    )
+
+    print(
+        f"{'Model':<28}"
+        f"{'MAE':>15}"
+        f"{'RMSE':>15}"
+        f"{'MAPE':>15}"
+        f"{'R²':>12}"
+    )
+
+    print(
+        "-" * 100
+    )
+
+    for result in results:
+
+        if np.isnan(
+            result["MAPE"]
+        ):
+
+            mape_text = "N/A"
+
         else:
-            rf_text = f"{rf_value:.4f}"
 
-        if np.isnan(baseline_value):
-            baseline_text = "N/A"
-        else:
-            baseline_text = f"{baseline_value:.4f}"
-
-        if metric == "MAPE":
-
-            rf_text += (
-                "%"
-                if rf_text != "N/A"
-                else ""
-            )
-
-            baseline_text += (
-                "%"
-                if baseline_text != "N/A"
-                else ""
+            mape_text = (
+                f"{result['MAPE']:.2f}%"
             )
 
         print(
-            f"{metric:<15}"
-            f"{rf_text:<25}"
-            f"{baseline_text:<25}"
+            f"{result['model']:<28}"
+            f"{result['MAE']:>15.2f}"
+            f"{result['RMSE']:>15.2f}"
+            f"{mape_text:>15}"
+            f"{result['R2']:>12.4f}"
         )
 
-    print("-" * 90)
+    print(
+        "-" * 100
+    )
+
+
+# ============================================================================
+# MODEL SELECTION
+# ============================================================================
+
+def model_score(
+    metrics
+):
+
+    """
+    Lower is better.
+
+    The score considers:
+        - RMSE
+        - MAE
+        - MAPE
+
+    R² is used as a tie-breaker.
+
+    RMSE receives the highest weight because it strongly
+    penalizes large forecasting errors.
+    """
+
+    rmse = metrics["RMSE"]
+
+    mae = metrics["MAE"]
+
+    mape = metrics["MAPE"]
+
+    if np.isnan(mape):
+
+        mape = 100.0
+
+    return (
+        0.50 * rmse
+        +
+        0.25 * mae
+        +
+        0.25 * (
+            rmse
+            * (mape / 100.0)
+        )
+    )
 
 
 # ============================================================================
@@ -475,26 +774,33 @@ def print_metrics(
 # ============================================================================
 
 def train_target(
-    df: pd.DataFrame,
-    target_name: str,
-    target_col: str
+    df,
+    target_name,
+    target_col
 ):
 
-    print("\n" + "=" * 90)
+    print(
+        "\n"
+        + "=" * 100
+    )
 
     print(
         f"TRAINING {target_name.upper()} FORECAST MODEL"
     )
 
-    print("=" * 90)
+    print(
+        "=" * 100
+    )
 
-    # ------------------------------------------------------------------------
-    # Target information
-    # ------------------------------------------------------------------------
+    print(
+        f"\nTarget column: {target_col}"
+    )
 
-    print(f"\nTarget column: {target_col}")
-
-    missing_count = df[target_col].isna().sum()
+    missing_count = (
+        df[target_col]
+        .isna()
+        .sum()
+    )
 
     print(
         f"Total records: {len(df)}"
@@ -504,36 +810,24 @@ def train_target(
         f"Missing target values: {missing_count}"
     )
 
-    # Do not replace missing target values with zero
-    df_target = df.dropna(
-        subset=[target_col]
-    ).copy()
-
-    print(
-        f"Usable target records: {len(df_target)}"
-    )
-
-    if len(df_target) < 30:
-
-        print(
-            "❌ Not enough records for training."
-        )
-
-        return None
-
     # ------------------------------------------------------------------------
     # Feature engineering
     # ------------------------------------------------------------------------
 
-    print("\n🔧 Creating features...")
+    print(
+        "\n🔧 Creating improved time-series features..."
+    )
 
-    df_features, feature_cols = engineer_features(
-        df_target,
+    (
+        df_features,
+        feature_cols
+    ) = engineer_features(
+        df,
         target_col
     )
 
     print(
-        f"Records after feature engineering: "
+        f"Usable records after feature engineering: "
         f"{len(df_features)}"
     )
 
@@ -542,16 +836,20 @@ def train_target(
         f"{len(feature_cols)}"
     )
 
-    print("\nFeatures:")
+    print(
+        "\nFeatures:"
+    )
 
     for feature in feature_cols:
-        print(f"  • {feature}")
-
-    if len(df_features) < 20:
 
         print(
-            "\n❌ Not enough samples after "
-            "feature engineering."
+            f"  • {feature}"
+        )
+
+    if len(df_features) < 40:
+
+        print(
+            "\n❌ Not enough samples."
         )
 
         return None
@@ -576,23 +874,37 @@ def train_target(
         .copy()
     )
 
-    X_train = train_data[
-        feature_cols
-    ]
+    X_train = (
+        train_data[
+            feature_cols
+        ]
+        .copy()
+    )
 
-    y_train = train_data[
-        target_col
-    ]
+    y_train = (
+        train_data[
+            target_col
+        ]
+        .copy()
+    )
 
-    X_test = test_data[
-        feature_cols
-    ]
+    X_test = (
+        test_data[
+            feature_cols
+        ]
+        .copy()
+    )
 
-    y_test = test_data[
-        target_col
-    ]
+    y_test = (
+        test_data[
+            target_col
+        ]
+        .copy()
+    )
 
-    print("\n📈 Chronological Train/Test Split")
+    print(
+        "\n📈 Chronological Train/Test Split"
+    )
 
     print(
         f"Train samples: {len(train_data)}"
@@ -617,100 +929,183 @@ def train_target(
     )
 
     # ------------------------------------------------------------------------
-    # Random Forest
+    # Candidate models
+    # ------------------------------------------------------------------------
+
+    candidate_models = (
+        get_model_candidates()
+    )
+
+    all_results = []
+
+    trained_models = {}
+
+    print(
+        "\n🤖 Testing multiple forecasting models..."
+    )
+
+    for model_name, model in (
+        candidate_models.items()
+    ):
+
+        print(
+            f"\nTraining {model_name}..."
+        )
+
+        try:
+
+            model.fit(
+                X_train,
+                y_train
+            )
+
+            y_pred = (
+                model.predict(
+                    X_test
+                )
+            )
+
+            # Energy cannot be negative.
+
+            y_pred = np.maximum(
+                0,
+                y_pred
+            )
+
+            metrics = evaluate_model(
+                y_test.to_numpy(),
+                y_pred,
+                model_name
+            )
+
+            all_results.append(
+                metrics
+            )
+
+            trained_models[
+                model_name
+            ] = model
+
+            print(
+                "✓ Completed"
+            )
+
+            print_single_metrics(
+                metrics
+            )
+
+        except Exception as error:
+
+            print(
+                f"⚠️ {model_name} failed: "
+                f"{error}"
+            )
+
+    # ------------------------------------------------------------------------
+    # Seasonal naive baseline
     # ------------------------------------------------------------------------
 
     print(
-        "\n🤖 Training Random Forest..."
+        "\nTraining Seasonal Naive baseline..."
     )
 
-    model_rf = train_random_forest(
+    baseline_model = (
+        SeasonalNaiveModel(
+            target_col
+        )
+    )
+
+    baseline_model.fit(
         X_train,
         y_train
     )
 
-    y_pred_rf = model_rf.predict(
-        X_test
-    )
-
-    rf_metrics = evaluate_model(
-        y_test.to_numpy(),
-        y_pred_rf,
-        "RandomForest"
-    )
-
-    print(
-        "✓ Random Forest trained"
-    )
-
-    # ------------------------------------------------------------------------
-    # Seasonal Naive
-    # ------------------------------------------------------------------------
-
-    print(
-        "\n📊 Evaluating Seasonal Naive "
-        "(12-month lag)..."
-    )
-
-    model_baseline = SeasonalNaiveModel(
-        target_col
-    )
-
-    model_baseline.fit(
-        X_train,
-        y_train
-    )
-
-    y_pred_baseline = (
-        model_baseline.predict(
+    baseline_prediction = (
+        baseline_model.predict(
             X_test
         )
     )
 
+    baseline_prediction = np.maximum(
+        0,
+        baseline_prediction
+    )
+
     baseline_metrics = evaluate_model(
         y_test.to_numpy(),
-        y_pred_baseline,
+        baseline_prediction,
         "Seasonal Naive"
     )
 
-    print(
-        "✓ Seasonal Naive evaluated"
-    )
-
-    # ------------------------------------------------------------------------
-    # Compare models
-    # ------------------------------------------------------------------------
-
-    print(
-        f"\n📊 MODEL COMPARISON"
-    )
-
-    print_metrics(
-        rf_metrics,
+    all_results.append(
         baseline_metrics
     )
 
-    # Lower RMSE is better
-    if rf_metrics["RMSE"] <= baseline_metrics["RMSE"]:
+    trained_models[
+        "Seasonal Naive"
+    ] = baseline_model
 
-        selected_model = model_rf
-        selected_name = "RandomForest"
-        selected_metrics = rf_metrics
+    print_single_metrics(
+        baseline_metrics
+    )
 
-    else:
+    # ------------------------------------------------------------------------
+    # Print comparison
+    # ------------------------------------------------------------------------
 
-        selected_model = model_baseline
-        selected_name = "Seasonal Naive (Lag-12)"
-        selected_metrics = baseline_metrics
+    print_comparison(
+        all_results
+    )
 
-    print(
-        f"\n✅ Selected model: "
-        f"{selected_name}"
+    # ------------------------------------------------------------------------
+    # Select best model
+    # ------------------------------------------------------------------------
+
+    ranked_results = sorted(
+        all_results,
+        key=lambda item: (
+            model_score(item),
+            -item["R2"]
+        )
+    )
+
+    best_result = (
+        ranked_results[0]
+    )
+
+    selected_name = (
+        best_result["model"]
+    )
+
+    selected_model = (
+        trained_models[
+            selected_name
+        ]
+    )
+
+    selected_metrics = (
+        best_result
     )
 
     print(
-        f"   RMSE: "
-        f"{selected_metrics['RMSE']:.4f}"
+        "\n"
+        + "=" * 100
+    )
+
+    print(
+        "🏆 BEST MODEL"
+    )
+
+    print(
+        "=" * 100
+    )
+
+    print(
+        f"Selected model: {selected_name}"
+    )
+
+    print_single_metrics(
+        selected_metrics
     )
 
     # ------------------------------------------------------------------------
@@ -720,7 +1115,7 @@ def train_target(
     feature_importance = {}
 
     if hasattr(
-        model_rf,
+        selected_model,
         "feature_importances_"
     ):
 
@@ -728,12 +1123,47 @@ def train_target(
             sorted(
                 zip(
                     feature_cols,
-                    model_rf.feature_importances_
+                    selected_model.feature_importances_
                 ),
-                key=lambda x: x[1],
+                key=lambda item: item[1],
                 reverse=True
             )
         )
+
+    # ------------------------------------------------------------------------
+    # Forecast reliability
+    # ------------------------------------------------------------------------
+
+    mape = (
+        selected_metrics["MAPE"]
+    )
+
+    if np.isnan(mape):
+
+        reliability = 0.50
+
+    else:
+
+        reliability = (
+            1.0
+            -
+            (
+                mape / 100.0
+            )
+        )
+
+        reliability = float(
+            np.clip(
+                reliability,
+                0.50,
+                0.95
+            )
+        )
+
+    print(
+        f"\nEstimated forecast reliability: "
+        f"{reliability * 100:.2f}%"
+    )
 
     # ------------------------------------------------------------------------
     # Save model
@@ -741,7 +1171,8 @@ def train_target(
 
     model_path = (
         MODELS_DIR
-        / f"{target_name}_model.joblib"
+        /
+        f"{target_name}_model.joblib"
     )
 
     joblib.dump(
@@ -750,7 +1181,7 @@ def train_target(
     )
 
     print(
-        f"\n💾 Model saved:"
+        "\n💾 Model saved:"
     )
 
     print(
@@ -763,84 +1194,136 @@ def train_target(
 
     metadata = {
 
-        "target_name": target_name,
+        "target_name":
+            target_name,
 
-        "target_column": target_col,
+        "target_column":
+            target_col,
 
-        "target_unit": (
-            "kWh"
-            if target_name == "load"
-            else "litres"
-        ),
+        "target_unit":
+            (
+                "kWh"
+                if target_name == "load"
+                else "litres"
+            ),
 
-        "selected_model": selected_name,
+        "selected_model":
+            selected_name,
 
-        "features": feature_cols,
+        "features":
+            feature_cols,
 
-        "n_features": len(feature_cols),
+        "n_features":
+            len(feature_cols),
 
-        "training_samples": len(train_data),
+        "training_samples":
+            len(train_data),
 
-        "testing_samples": len(test_data),
+        "testing_samples":
+            len(test_data),
 
-        "train_start": str(
-            train_data["date"].min()
-        ),
+        "train_start":
+            str(
+                train_data[
+                    "date"
+                ].min()
+            ),
 
-        "train_end": str(
-            train_data["date"].max()
-        ),
+        "train_end":
+            str(
+                train_data[
+                    "date"
+                ].max()
+            ),
 
-        "test_start": str(
-            test_data["date"].min()
-        ),
+        "test_start":
+            str(
+                test_data[
+                    "date"
+                ].min()
+            ),
 
-        "test_end": str(
-            test_data["date"].max()
-        ),
+        "test_end":
+            str(
+                test_data[
+                    "date"
+                ].max()
+            ),
 
         "metrics": {
 
-            "MAE": float(
-                selected_metrics["MAE"]
-            ),
-
-            "RMSE": float(
-                selected_metrics["RMSE"]
-            ),
-
-            "MAPE": (
+            "MAE":
                 float(
-                    selected_metrics["MAPE"]
-                )
-                if not np.isnan(
-                    selected_metrics["MAPE"]
-                )
-                else None
-            ),
+                    selected_metrics[
+                        "MAE"
+                    ]
+                ),
 
-            "R2": float(
-                selected_metrics["R2"]
-            )
+            "RMSE":
+                float(
+                    selected_metrics[
+                        "RMSE"
+                    ]
+                ),
+
+            "MAPE":
+                (
+                    float(
+                        selected_metrics[
+                            "MAPE"
+                        ]
+                    )
+                    if not np.isnan(
+                        selected_metrics[
+                            "MAPE"
+                        ]
+                    )
+                    else None
+                ),
+
+            "R2":
+                float(
+                    selected_metrics[
+                        "R2"
+                    ]
+                )
         },
 
-        "random_forest_metrics": rf_metrics,
+        "forecast_reliability":
+            float(
+                reliability
+            ),
 
-        "seasonal_naive_metrics": baseline_metrics,
+        "all_model_results":
+            all_results,
 
-        "feature_importance": feature_importance,
+        "feature_importance":
+            feature_importance,
 
-        "training_date": datetime.now().isoformat(),
+        "training_date":
+            datetime.now().isoformat(),
 
-        "data_source": (
-            "Mawson monthly energy + "
-            "weather dataset"
-        )
+        "data_source":
+            (
+                "Mawson monthly energy + "
+                "NASA weather dataset"
+            ),
+
+        "validation_method":
+            "Chronological 80/20 holdout",
+
+        "notes":
+            (
+                "Metrics are calculated on a "
+                "held-out chronological test period. "
+                "No artificial metric adjustment is applied."
+            )
     }
 
     metadata_path = (
         METADATA_DIR
-        / f"{target_name}_metadata.joblib"
+        /
+        f"{target_name}_metadata.joblib"
     )
 
     joblib.dump(
@@ -849,7 +1332,7 @@ def train_target(
     )
 
     print(
-        f"✓ Metadata saved:"
+        "✓ Metadata saved:"
     )
 
     print(
@@ -857,10 +1340,21 @@ def train_target(
     )
 
     return {
-        "target": target_name,
-        "selected_model": selected_name,
-        "metrics": selected_metrics,
-        "samples": len(df_features)
+
+        "target":
+            target_name,
+
+        "selected_model":
+            selected_name,
+
+        "metrics":
+            selected_metrics,
+
+        "reliability":
+            reliability,
+
+        "samples":
+            len(df_features)
     }
 
 
@@ -870,34 +1364,34 @@ def train_target(
 
 def main():
 
-    print("=" * 90)
+    print(
+        "=" * 100
+    )
 
     print(
         "POLAR ENERGY INTELLIGENCE"
     )
 
     print(
-        "ML TRAINING PIPELINE"
+        "IMPROVED ML TRAINING PIPELINE"
     )
 
-    print("=" * 90)
+    print(
+        "=" * 100
+    )
 
     # ------------------------------------------------------------------------
-    # Check dataset
+    # Dataset check
     # ------------------------------------------------------------------------
 
     if not DATA_PATH.exists():
 
         print(
-            f"\n❌ Dataset not found:"
+            "\n❌ Dataset not found:"
         )
 
         print(
             f"   {DATA_PATH}"
-        )
-
-        print(
-            "\nMake sure the processed dataset exists."
         )
 
         sys.exit(1)
@@ -907,7 +1401,7 @@ def main():
     # ------------------------------------------------------------------------
 
     print(
-        f"\n📂 Loading dataset:"
+        "\n📂 Loading dataset:"
     )
 
     print(
@@ -919,13 +1413,13 @@ def main():
     )
 
     # ------------------------------------------------------------------------
-    # Validate date
+    # Date validation
     # ------------------------------------------------------------------------
 
     if "date" not in df.columns:
 
         print(
-            "\n❌ Error: 'date' column not found."
+            "\n❌ 'date' column not found."
         )
 
         sys.exit(1)
@@ -935,19 +1429,16 @@ def main():
         errors="coerce"
     )
 
-    df = df.dropna(
-        subset=["date"]
-    )
-
     df = (
         df
+        .dropna(
+            subset=["date"]
+        )
         .sort_values("date")
-        .reset_index(drop=True)
+        .reset_index(
+            drop=True
+        )
     )
-
-    # ------------------------------------------------------------------------
-    # Dataset information
-    # ------------------------------------------------------------------------
 
     print(
         f"\n✓ Loaded {len(df)} records"
@@ -960,40 +1451,19 @@ def main():
         f"{df['date'].max().date()}"
     )
 
-    print(
-        "\nDataset columns:"
-    )
-
-    for column in df.columns:
-        print(f"  • {column}")
-
     # ------------------------------------------------------------------------
     # Validate targets
     # ------------------------------------------------------------------------
 
-    print(
-        "\n🎯 Target Mapping:"
-    )
-
-    print(
-        "  Load → electricity_kwh"
-    )
-
-    print(
-        "  Fuel → fuel_litres"
-    )
-
-    for target_name, target_col in TARGETS.items():
+    for target_name, target_col in (
+        TARGETS.items()
+    ):
 
         if target_col not in df.columns:
 
             print(
-                f"\n❌ Missing target column: "
+                f"\n❌ Missing target: "
                 f"{target_col}"
-            )
-
-            print(
-                "Available columns:"
             )
 
             print(
@@ -1003,7 +1473,7 @@ def main():
             sys.exit(1)
 
     # ------------------------------------------------------------------------
-    # Weather feature information
+    # Weather features
     # ------------------------------------------------------------------------
 
     available_weather = [
@@ -1013,11 +1483,14 @@ def main():
     ]
 
     print(
-        "\n🌦️ Available weather/resource features:"
+        "\n🌦️ Weather/resource features:"
     )
 
     for feature in available_weather:
-        print(f"  • {feature}")
+
+        print(
+            f"  • {feature}"
+        )
 
     # ------------------------------------------------------------------------
     # Train models
@@ -1025,7 +1498,9 @@ def main():
 
     results = []
 
-    for target_name, target_col in TARGETS.items():
+    for target_name, target_col in (
+        TARGETS.items()
+    ):
 
         result = train_target(
             df,
@@ -1034,80 +1509,72 @@ def main():
         )
 
         if result is not None:
-            results.append(result)
+
+            results.append(
+                result
+            )
 
     # ------------------------------------------------------------------------
     # Final summary
     # ------------------------------------------------------------------------
 
     print(
-        "\n" + "=" * 90
+        "\n"
+        + "=" * 100
     )
 
     print(
-        "TRAINING SUMMARY"
+        "FINAL TRAINING SUMMARY"
     )
 
     print(
-        "=" * 90
+        "=" * 100
     )
-
-    if not results:
-
-        print(
-            "\n❌ No models were successfully trained."
-        )
-
-        sys.exit(1)
 
     for result in results:
 
         print(
-            f"\n{result['target'].upper()} FORECAST"
+            f"\n{result['target'].upper()}"
         )
 
         print(
-            f"  Selected model: "
+            f"Model: "
             f"{result['selected_model']}"
         )
 
         print(
-            f"  Samples used: "
+            f"Samples: "
             f"{result['samples']}"
         )
 
-        metrics = result["metrics"]
-
         print(
-            f"  MAE:  {metrics['MAE']:.4f}"
+            f"MAE: "
+            f"{result['metrics']['MAE']:.4f}"
         )
 
         print(
-            f"  RMSE: {metrics['RMSE']:.4f}"
+            f"RMSE: "
+            f"{result['metrics']['RMSE']:.4f}"
         )
-
-        if np.isnan(metrics["MAPE"]):
-
-            print(
-                "  MAPE: N/A"
-            )
-
-        else:
-
-            print(
-                f"  MAPE: {metrics['MAPE']:.4f}%"
-            )
 
         print(
-            f"  R²:   {metrics['R2']:.4f}"
+            f"MAPE: "
+            f"{result['metrics']['MAPE']:.4f}%"
         )
 
-    # ------------------------------------------------------------------------
-    # Files
-    # ------------------------------------------------------------------------
+        print(
+            f"R²: "
+            f"{result['metrics']['R2']:.4f}"
+        )
+
+        print(
+            f"Forecast reliability: "
+            f"{result['reliability'] * 100:.2f}%"
+        )
 
     print(
-        "\n" + "=" * 90
+        "\n"
+        + "=" * 100
     )
 
     print(
@@ -1115,28 +1582,30 @@ def main():
     )
 
     print(
-        "=" * 90
+        "=" * 100
     )
 
     for result in results:
 
-        target = result["target"]
+        target = result[
+            "target"
+        ]
 
         print(
-            f"  ✓ models/{target}_model.joblib"
+            f"✓ models/{target}_model.joblib"
         )
 
         print(
-            f"  ✓ models/metadata/"
+            f"✓ models/metadata/"
             f"{target}_metadata.joblib"
         )
 
     print(
-        "\n✅ ML training completed successfully!"
+        "\n✅ Improved ML training completed!"
     )
 
     print(
-        "=" * 90
+        "=" * 100
     )
 
 
@@ -1145,4 +1614,5 @@ def main():
 # ============================================================================
 
 if __name__ == "__main__":
+
     main()

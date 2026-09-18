@@ -15,17 +15,22 @@ class EnergyModelService:
         that month exists in the dataset.
 
     Future dates:
-        Uses the trained Random Forest model with historical seasonal
-        context to generate a monthly forecast.
+        Uses the trained ML model with historical seasonal context
+        to generate a monthly forecast.
 
     Important:
         Mawson electricity/fuel data is monthly. Therefore, when a
         specific day is entered for a historical month, the system
         returns that month's exact monthly observation and also shows
         a simple daily equivalent for comparison.
+
+        Forecast reliability is an estimated reliability score derived
+        from the model's validation performance. It is NOT a probability
+        that the prediction is correct.
     """
 
     def __init__(self):
+
         # ============================================================
         # PATHS
         # ============================================================
@@ -93,8 +98,25 @@ class EnergyModelService:
             "fuel_metadata.joblib"
         )
 
+        # ============================================================
+        # MODEL FEATURES
+        # ============================================================
+
         self.load_features = self.load_meta["features"]
+
         self.fuel_features = self.fuel_meta["features"]
+
+        # ============================================================
+        # MODEL RELIABILITY
+        # ============================================================
+
+        self.load_reliability = self._get_reliability(
+            self.load_meta
+        )
+
+        self.fuel_reliability = self._get_reliability(
+            self.fuel_meta
+        )
 
         # ============================================================
         # HISTORICAL LOAD
@@ -167,6 +189,8 @@ class EnergyModelService:
 
         return joblib.load(path)
 
+    # ================================================================
+
     def _load_metadata(self, filename):
 
         path = (
@@ -183,6 +207,65 @@ class EnergyModelService:
         return joblib.load(path)
 
     # ================================================================
+    # RELIABILITY
+    # ================================================================
+
+    def _get_reliability(self, metadata):
+
+        """
+        Get reliability saved during model training.
+
+        If the training metadata contains 'reliability', use it.
+
+        Otherwise calculate an estimated reliability from MAPE:
+
+            reliability = 1 - MAPE / 100
+
+        The result is limited to 50%-95%.
+
+        This is an estimated reliability indicator and not a
+        calibrated probability.
+        """
+
+        saved_reliability = metadata.get(
+            "reliability"
+        )
+
+        if saved_reliability is not None:
+
+            return float(
+                np.clip(
+                    float(saved_reliability),
+                    0.50,
+                    0.95
+                )
+            )
+
+        metrics = metadata.get(
+            "metrics",
+            {}
+        )
+
+        mape = float(
+            metrics.get(
+                "MAPE",
+                50.0
+            )
+        )
+
+        reliability = (
+            1.0 - mape / 100.0
+        )
+
+        return float(
+            np.clip(
+                reliability,
+                0.50,
+                0.95
+            )
+        )
+
+    # ================================================================
     # HEALTH CHECK
     # ================================================================
 
@@ -190,19 +273,44 @@ class EnergyModelService:
 
         return {
             "status": "ok",
-            "dataset_rows": int(len(self.df)),
+
+            "dataset_rows": int(
+                len(self.df)
+            ),
+
             "date_start": str(
                 self.df["date"].min().date()
             ),
+
             "date_end": str(
                 self.df["date"].max().date()
             ),
+
             "load_model": self.load_meta.get(
                 "selected_model"
             ),
+
             "fuel_model": self.fuel_meta.get(
                 "selected_model"
             ),
+
+            "load_reliability": round(
+                self.load_reliability,
+                4
+            ),
+
+            "fuel_reliability": round(
+                self.fuel_reliability,
+                4
+            ),
+
+            "load_features": len(
+                self.load_features
+            ),
+
+            "fuel_features": len(
+                self.fuel_features
+            )
         }
 
     # ================================================================
@@ -216,13 +324,19 @@ class EnergyModelService:
 
         return {
             "year": int(date.year),
+
             "month": month,
-            "quarter": int(date.quarter),
+
+            "quarter": int(
+                date.quarter
+            ),
+
             "month_sin": float(
                 np.sin(
                     2 * np.pi * month / 12
                 )
             ),
+
             "month_cos": float(
                 np.cos(
                     2 * np.pi * month / 12
@@ -237,15 +351,25 @@ class EnergyModelService:
     def _build_weather_climatology(self):
 
         weather_columns = [
+
             "ALLSKY_SFC_SW_DWN",
+
             "WS50M",
+
             "WD50M",
+
             "PS",
+
             "T2M",
+
             "RH2M",
+
             "T2M_MAX",
+
             "T2M_MIN",
+
             "WS10M_MAX",
+
             "WS10M_MIN",
         ]
 
@@ -312,9 +436,11 @@ class EnergyModelService:
     ):
 
         if target_col == "electricity_kwh":
+
             return self.load_history_indexed
 
         if target_col == "fuel_litres":
+
             return self.fuel_history_indexed
 
         raise ValueError(
@@ -336,6 +462,7 @@ class EnergyModelService:
         )
 
         if not history:
+
             raise ValueError(
                 f"No historical data for {target_col}."
             )
@@ -358,7 +485,10 @@ class EnergyModelService:
 
             valid = True
 
-            # Required lag values
+            # --------------------------------------------------------
+            # REQUIRED LAGS
+            # --------------------------------------------------------
+
             for lag in [
                 1,
                 2,
@@ -375,13 +505,17 @@ class EnergyModelService:
                 )
 
                 if check_date not in history:
+
                     valid = False
                     break
 
             if not valid:
                 continue
 
-            # Required rolling-history values
+            # --------------------------------------------------------
+            # REQUIRED ROLLING HISTORY
+            # --------------------------------------------------------
+
             for window in [
                 3,
                 6,
@@ -401,6 +535,7 @@ class EnergyModelService:
                     )
 
                     if check_date not in history:
+
                         valid = False
                         break
 
@@ -408,6 +543,7 @@ class EnergyModelService:
                     break
 
             if valid:
+
                 return candidate
 
         raise ValueError(
@@ -441,13 +577,17 @@ class EnergyModelService:
             target_col
         )
 
+        # ============================================================
+        # TIME FEATURES
+        # ============================================================
+
         row = self._time_features(
             requested_date
         )
 
-        # ------------------------------------------------------------
+        # ============================================================
         # LAGS
-        # ------------------------------------------------------------
+        # ============================================================
 
         for lag in [
             1,
@@ -470,13 +610,15 @@ class EnergyModelService:
                     )
                 )
 
-                row[column] = float(
-                    history[lag_date]
-                )
+                if lag_date in history:
 
-        # ------------------------------------------------------------
+                    row[column] = float(
+                        history[lag_date]
+                    )
+
+        # ============================================================
         # ROLLING MEANS
-        # ------------------------------------------------------------
+        # ============================================================
 
         for window in [
             3,
@@ -505,19 +647,25 @@ class EnergyModelService:
                         )
                     )
 
-                    values.append(
-                        float(
-                            history[check_date]
+                    if check_date in history:
+
+                        values.append(
+                            float(
+                                history[
+                                    check_date
+                                ]
+                            )
                         )
+
+                if values:
+
+                    row[column] = float(
+                        np.mean(values)
                     )
 
-                row[column] = float(
-                    np.mean(values)
-                )
-
-        # ------------------------------------------------------------
+        # ============================================================
         # WEATHER
-        # ------------------------------------------------------------
+        # ============================================================
 
         month = int(
             requested_date.month
@@ -525,7 +673,8 @@ class EnergyModelService:
 
         if (
             not self.weather_climatology.empty
-            and month in self.weather_climatology.index
+            and month in
+            self.weather_climatology.index
         ):
 
             weather_values = (
@@ -539,9 +688,9 @@ class EnergyModelService:
                 weather_values
             )
 
-        # ------------------------------------------------------------
+        # ============================================================
         # FALLBACK MEDIANS
-        # ------------------------------------------------------------
+        # ============================================================
 
         medians = self._training_medians(
             features
@@ -564,6 +713,10 @@ class EnergyModelService:
                     0.0
                 )
 
+        # ============================================================
+        # DATAFRAME
+        # ============================================================
+
         x = pd.DataFrame(
             [values],
             columns=features
@@ -573,6 +726,10 @@ class EnergyModelService:
             pd.to_numeric,
             errors="coerce"
         )
+
+        # ============================================================
+        # FINAL NaN PROTECTION
+        # ============================================================
 
         for feature in features:
 
@@ -587,7 +744,10 @@ class EnergyModelService:
                     )
                 )
 
-        return x, reference_date
+        return (
+            x,
+            reference_date
+        )
 
     # ================================================================
     # FAST MONTH PREDICTION
@@ -615,7 +775,10 @@ class EnergyModelService:
             target_col
         )
 
-        # Exact historical month available
+        # ============================================================
+        # HISTORICAL MONTH
+        # ============================================================
+
         if target_month in history:
 
             return (
@@ -625,7 +788,10 @@ class EnergyModelService:
                 True
             )
 
-        # Otherwise generate one ML prediction
+        # ============================================================
+        # FUTURE PREDICTION
+        # ============================================================
+
         x, reference_date = (
             self._build_fast_model_row(
                 target_date,
@@ -749,19 +915,6 @@ class EnergyModelService:
             monthly_value / days
         )
 
-        r2 = float(
-            self.load_meta["metrics"]["R2"]
-        )
-
-        confidence = float(
-            np.clip(
-                0.55
-                + max(r2, 0) * 0.35,
-                0.55,
-                0.90
-            )
-        )
-
         return {
 
             "date": date.strftime(
@@ -787,7 +940,7 @@ class EnergyModelService:
             "dataType": "FORECAST",
 
             "source":
-                "Random Forest model + historical seasonal context",
+                f"{self.load_meta.get('selected_model', 'ML')} model + historical seasonal context",
 
             "model":
                 self.load_meta.get(
@@ -795,8 +948,8 @@ class EnergyModelService:
                 ),
 
             "confidence": round(
-                confidence,
-                3
+                self.load_reliability,
+                4
             ),
 
             "metrics":
@@ -806,7 +959,7 @@ class EnergyModelService:
                 ),
 
             "forecastType":
-                "Future estimate from monthly-trained Random Forest model"
+                "Future estimate from monthly-trained ML model"
         }
 
     # ================================================================
@@ -910,19 +1063,6 @@ class EnergyModelService:
             monthly_value / days
         )
 
-        r2 = float(
-            self.fuel_meta["metrics"]["R2"]
-        )
-
-        confidence = float(
-            np.clip(
-                0.50
-                + max(r2, 0) * 0.40,
-                0.50,
-                0.75
-            )
-        )
-
         return {
 
             "date": date.strftime(
@@ -948,7 +1088,7 @@ class EnergyModelService:
             "dataType": "FORECAST",
 
             "source":
-                "Random Forest model + historical seasonal context",
+                f"{self.fuel_meta.get('selected_model', 'ML')} model + historical seasonal context",
 
             "model":
                 self.fuel_meta.get(
@@ -956,8 +1096,8 @@ class EnergyModelService:
                 ),
 
             "confidence": round(
-                confidence,
-                3
+                self.fuel_reliability,
+                4
             ),
 
             "metrics":
@@ -967,11 +1107,11 @@ class EnergyModelService:
                 ),
 
             "forecastType":
-                "Future estimate from monthly-trained Random Forest model"
+                "Future estimate from monthly-trained ML model"
         }
 
     # ================================================================
-    # 12-MONTH LOAD FORECAST
+    # RECURSIVE FORECAST
     # ================================================================
 
     def _recursive_forecast(
@@ -983,11 +1123,19 @@ class EnergyModelService:
     ):
 
         if target_col == "electricity_kwh":
-            history = self.load_history.copy()
+
+            history = (
+                self.load_history.copy()
+            )
+
         else:
-            history = self.fuel_history.copy()
+
+            history = (
+                self.fuel_history.copy()
+            )
 
         if len(history) < 24:
+
             raise ValueError(
                 f"Not enough {target_col} history."
             )
@@ -1011,7 +1159,14 @@ class EnergyModelService:
 
         predictions = []
 
+        # ============================================================
+        # FORECAST EACH MONTH
+        # ============================================================
+
         for date in future_dates:
+
+            # For recursive forecasting, use the most recent
+            # historical/forecast context available.
 
             x, _ = (
                 self._build_fast_model_row(
@@ -1059,15 +1214,27 @@ class EnergyModelService:
             )
         )
 
+        # ============================================================
+        # HISTORICAL DATA FOR GRAPH
+        # ============================================================
+
         historical = (
             self.load_history
             .tail(24)
             .sort_values("date")
         )
 
+        # ============================================================
+        # PEAK
+        # ============================================================
+
         peak_idx = int(
             np.argmax(predictions)
         )
+
+        # ============================================================
+        # LATEST OBSERVED VALUE
+        # ============================================================
 
         latest = float(
             self.load_history[
@@ -1075,18 +1242,9 @@ class EnergyModelService:
             ].iloc[-1]
         )
 
-        r2 = float(
-            self.load_meta["metrics"]["R2"]
-        )
-
-        confidence = float(
-            np.clip(
-                0.55
-                + max(r2, 0) * 0.35,
-                0.55,
-                0.90
-            )
-        )
+        # ============================================================
+        # RESPONSE
+        # ============================================================
 
         return {
 
@@ -1127,7 +1285,10 @@ class EnergyModelService:
             ),
 
             "confidence": [
-                confidence
+                round(
+                    self.load_reliability,
+                    4
+                )
                 for _ in predictions
             ],
 
@@ -1145,6 +1306,11 @@ class EnergyModelService:
             "metrics": self.load_meta.get(
                 "metrics",
                 {}
+            ),
+
+            "reliability": round(
+                self.load_reliability,
+                4
             )
         }
 
@@ -1166,39 +1332,41 @@ class EnergyModelService:
             )
         )
 
+        # ============================================================
+        # LATEST OBSERVED FUEL
+        # ============================================================
+
         latest = float(
             self.fuel_history[
                 "fuel_litres"
             ].iloc[-1]
         )
 
-        r2 = float(
-            self.fuel_meta["metrics"]["R2"]
-        )
-
-        confidence = float(
-            np.clip(
-                0.50
-                + max(r2, 0) * 0.40,
-                0.50,
-                0.75
-            )
-        )
+        # ============================================================
+        # TREND
+        # ============================================================
 
         if (
             predictions[-1]
             > predictions[0] * 1.05
         ):
+
             trend = "UP"
 
         elif (
             predictions[-1]
             < predictions[0] * 0.95
         ):
+
             trend = "DOWN"
 
         else:
+
             trend = "STABLE"
+
+        # ============================================================
+        # RESPONSE
+        # ============================================================
 
         return {
 
@@ -1240,13 +1408,15 @@ class EnergyModelService:
 
             "trend": trend,
 
+            # These remain zero because the available
+            # dataset does not contain measured fuel savings.
             "avoidableFuel": 0.0,
 
             "estimatedSavings": 0.0,
 
             "confidence": round(
-                confidence,
-                3
+                self.fuel_reliability,
+                4
             ),
 
             "unit": "litres/month",
@@ -1258,5 +1428,10 @@ class EnergyModelService:
             "metrics": self.fuel_meta.get(
                 "metrics",
                 {}
+            ),
+
+            "reliability": round(
+                self.fuel_reliability,
+                4
             )
         }

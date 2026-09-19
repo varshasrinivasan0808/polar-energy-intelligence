@@ -20,6 +20,8 @@ import Alerts from './pages/Alerts'
 import Analytics from './pages/Analytics'
 import Weather from './pages/Weather'
 import Simulation from './pages/Simulation'
+import ScenarioLab from './pages/ScenarioLab'
+import DatasetCenter from './pages/DatasetCenter'
 
 // These files were reused for the new sections.
 import RenewablePage from './pages/Equipment'
@@ -34,6 +36,8 @@ type Page =
   | 'simulation'
   | 'analytics'
   | 'alerts'
+  | 'scenario'
+  | 'dataset'
 
 const navItems = [
   {
@@ -141,6 +145,11 @@ useEffect(() => {
 
       case 'alerts':
         return <Alerts />
+      case 'scenario':
+        return <ScenarioLab />
+
+      case 'dataset':
+        return <DatasetCenter />
 
       default:
         return <Dashboard />

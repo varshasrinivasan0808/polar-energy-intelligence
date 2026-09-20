@@ -13,6 +13,7 @@ import {
   BarChart3,
   Bell,
   CloudSun,
+  Database,
 } from 'lucide-react'
 
 import Dashboard from './pages/Dashboard'
@@ -79,6 +80,16 @@ const navItems = [
     id: 'alerts' as Page,
     label: 'Alerts',
     icon: Bell,
+  },
+  {
+    id: 'scenario' as Page,
+    label: 'Scenario Lab',
+    icon: FlaskConical,
+  },
+  {
+    id: 'dataset' as Page,
+    label: 'Dataset Center',
+    icon: Database,
   },
 ]
 

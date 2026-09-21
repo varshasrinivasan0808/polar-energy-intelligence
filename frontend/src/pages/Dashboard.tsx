@@ -592,7 +592,7 @@ const Dashboard: React.FC = () => {
               <span className="text-xs text-slate-500">
                 {isHistorical
                   ? 'Source: Mawson dataset'
-                  : 'Source: Random Forest + seasonal context'}
+                  : 'Source: Gradient Boosting + seasonal context'}
               </span>
 
             </div>
@@ -610,7 +610,7 @@ const Dashboard: React.FC = () => {
             text={
               isHistorical
                 ? 'Load: Mawson dataset'
-                : 'Load: Random Forest forecast'
+                : 'Load: Gradient Boosting forecast'
             }
           />
 
@@ -618,7 +618,7 @@ const Dashboard: React.FC = () => {
             text={
               isHistorical
                 ? 'Fuel: Mawson dataset'
-                : 'Fuel: Random Forest forecast'
+                : 'Fuel: Gradient Boosting forecast'
             }
           />
 
@@ -735,7 +735,7 @@ const Dashboard: React.FC = () => {
 
               {isHistorical
                 ? `This date belongs to a month available in the Mawson dataset. Load (${displayLoadValue} kWh/month) and fuel (${displayFuelValue} L/month) are the actual observed monthly values.`
-                : 'This date is beyond the available historical energy dataset. Load and fuel are therefore estimated using the trained Random Forest models and historical seasonal context.'}
+                : 'This date is beyond the available historical energy dataset. Load and fuel are therefore estimated using the trained Gradient Boosting models and historical seasonal context.'}
 
             </p>
 
@@ -981,7 +981,7 @@ const Dashboard: React.FC = () => {
           value={
             isHistorical
               ? 'Mawson electricity dataset'
-              : 'Random Forest forecast'
+              : 'Gradient Boosting forecast'
           }
         />
 
@@ -999,7 +999,7 @@ const Dashboard: React.FC = () => {
           value={
             isHistorical
               ? 'Mawson fuel dataset'
-              : 'Random Forest forecast'
+              : 'Gradient Boosting forecast'
           }
         />
 

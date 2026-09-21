@@ -163,30 +163,37 @@ const Equipment: React.FC = () => {
   // ==========================================================
 
   const statusConfig = {
-    HIGH: {
-      label: 'HIGH',
-      border: 'border-green-700',
-      background: 'bg-green-950/20',
-      text: 'text-green-300',
-    },
+  HIGH: {
+    label: 'HIGH',
+    border: 'border-green-700',
+    background: 'bg-green-950/20',
+    text: 'text-green-300',
+  },
 
-    MODERATE: {
-      label: 'MODERATE',
-      border: 'border-yellow-700',
-      background: 'bg-yellow-950/20',
-      text: 'text-yellow-300',
-    },
+  MODERATE: {
+    label: 'MODERATE',
+    border: 'border-yellow-700',
+    background: 'bg-yellow-950/20',
+    text: 'text-yellow-300',
+  },
 
-    LOW: {
-      label: 'LOW',
-      border: 'border-red-700',
-      background: 'bg-red-950/20',
-      text: 'text-red-300',
-    },
-  }
+  LOW: {
+    label: 'LOW',
+    border: 'border-red-700',
+    background: 'bg-red-950/20',
+    text: 'text-red-300',
+  },
 
-  const status =
-    statusConfig[data.status]
+  'WIND-DEPENDENT': {
+    label: 'WIND-DEPENDENT',
+    border: 'border-blue-700',
+    background: 'bg-blue-950/20',
+    text: 'text-blue-300',
+  },
+}
+
+const status =
+  statusConfig[data.status] ?? statusConfig.LOW
 
   // ==========================================================
   // RENDER

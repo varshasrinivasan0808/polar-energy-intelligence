@@ -1,6 +1,6 @@
-import { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { getStoredAlerts } from './services/alertStore'
-import React, { useState } from 'react'
+
 import {
   Menu,
   X,
@@ -8,8 +8,6 @@ import {
   Zap,
   Sun,
   Fuel,
-  Brain,
-  FlaskConical,
   BarChart3,
   Bell,
   CloudSun,
@@ -20,13 +18,33 @@ import Dashboard from './pages/Dashboard'
 import Alerts from './pages/Alerts'
 import Analytics from './pages/Analytics'
 import Weather from './pages/Weather'
-import Simulation from './pages/Simulation'
 import ScenarioLab from './pages/ScenarioLab'
 import DatasetCenter from './pages/DatasetCenter'
 
-// These files were reused for the new sections.
+// Existing pages reused for Renewable Energy and Fuel Optimization
 import RenewablePage from './pages/Equipment'
 import FuelOptimizationPage from './pages/Settings'
+
+import {
+  loadForecastAPI,
+  type LoadForecast,
+} from './services/api'
+
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts'
+
+
+/* =============================================================
+   PAGE TYPES
+============================================================= */
 
 type Page =
   | 'dashboard'
@@ -34,11 +52,15 @@ type Page =
   | 'renewable'
   | 'fuel'
   | 'weather'
-  | 'simulation'
   | 'analytics'
   | 'alerts'
   | 'scenario'
   | 'dataset'
+
+
+/* =============================================================
+   SIDEBAR NAVIGATION
+============================================================= */
 
 const navItems = [
   {
@@ -62,14 +84,9 @@ const navItems = [
     icon: Fuel,
   },
   {
-  id: 'weather' as Page,
-  label: 'Weather Outlook',
-  icon: CloudSun,
-  },
-  {
-    id: 'simulation' as Page,
-    label: 'Simulation',
-    icon: FlaskConical,
+    id: 'weather' as Page,
+    label: 'Weather Outlook',
+    icon: CloudSun,
   },
   {
     id: 'analytics' as Page,
@@ -84,7 +101,7 @@ const navItems = [
   {
     id: 'scenario' as Page,
     label: 'Scenario Lab',
-    icon: FlaskConical,
+    icon: BarChart3,
   },
   {
     id: 'dataset' as Page,
@@ -93,46 +110,68 @@ const navItems = [
   },
 ]
 
+
+/* =============================================================
+   MAIN APP
+============================================================= */
+
 const App: React.FC = () => {
+
   const [currentPage, setCurrentPage] =
     useState<Page>('dashboard')
 
   const [sidebarOpen, setSidebarOpen] =
     useState(true)
-  const [alertCount, setAlertCount] = useState(
-  getStoredAlerts().length
-)
 
-useEffect(() => {
-  const updateAlertCount = () => {
-    setAlertCount(getStoredAlerts().length)
-  }
+  const [alertCount, setAlertCount] =
+    useState(getStoredAlerts().length)
 
-  window.addEventListener(
-    'polar-alerts-updated',
-    updateAlertCount
-  )
 
-  window.addEventListener(
-    'storage',
-    updateAlertCount
-  )
+  /* ===========================================================
+     ALERT COUNT LISTENER
+  =========================================================== */
 
-  return () => {
-    window.removeEventListener(
+  useEffect(() => {
+
+    const updateAlertCount = () => {
+      setAlertCount(getStoredAlerts().length)
+    }
+
+    window.addEventListener(
       'polar-alerts-updated',
       updateAlertCount
     )
 
-    window.removeEventListener(
+    window.addEventListener(
       'storage',
       updateAlertCount
     )
-  }
-}, [])
+
+    return () => {
+
+      window.removeEventListener(
+        'polar-alerts-updated',
+        updateAlertCount
+      )
+
+      window.removeEventListener(
+        'storage',
+        updateAlertCount
+      )
+
+    }
+
+  }, [])
+
+
+  /* ===========================================================
+     PAGE ROUTER
+  =========================================================== */
 
   const renderPage = () => {
+
     switch (currentPage) {
+
       case 'dashboard':
         return <Dashboard />
 
@@ -148,14 +187,12 @@ useEffect(() => {
       case 'weather':
         return <Weather />
 
-      case 'simulation':
-        return <Simulation />
-
       case 'analytics':
         return <Analytics />
 
       case 'alerts':
         return <Alerts />
+
       case 'scenario':
         return <ScenarioLab />
 
@@ -164,13 +201,22 @@ useEffect(() => {
 
       default:
         return <Dashboard />
+
     }
+
   }
 
+
+  /* ===========================================================
+     APP UI
+  =========================================================== */
+
   return (
+
     <div className="min-h-screen bg-slate-950 text-white">
 
       <div className="flex min-h-screen">
+
 
         {/* =====================================================
             SIDEBAR
@@ -184,11 +230,15 @@ useEffect(() => {
           } flex-shrink-0 border-r border-slate-800 bg-slate-900 transition-all duration-300`}
         >
 
-          {/* Brand */}
+
+          {/* =================================================
+              BRAND
+          ================================================= */}
 
           <div className="flex items-center justify-between border-b border-slate-800 p-4">
 
             {sidebarOpen && (
+
               <div>
 
                 <h1 className="text-lg font-bold text-cyan-300">
@@ -200,12 +250,14 @@ useEffect(() => {
                 </p>
 
               </div>
+
             )}
+
 
             <button
               onClick={() =>
                 setSidebarOpen(
-                  (previous) => !previous
+                  previous => !previous
                 )
               }
               className="rounded-lg p-2 text-slate-300 hover:bg-slate-800"
@@ -223,11 +275,13 @@ useEffect(() => {
           </div>
 
 
-          {/* Navigation */}
+          {/* =================================================
+              NAVIGATION
+          ================================================= */}
 
           <nav className="space-y-2 p-3">
 
-            {navItems.map((item) => {
+            {navItems.map(item => {
 
               const Icon = item.icon
 
@@ -249,30 +303,41 @@ useEffect(() => {
                 >
 
                   <Icon size={20} />
-                  {
-                  sidebarOpen && (
+
+                  {sidebarOpen && (
+
                     <span className="text-sm font-medium">
-                     {item.label}
+                      {item.label}
                     </span>
+
                   )}
 
                   {sidebarOpen &&
-                   item.id === 'alerts' &&
-                   alertCount > 0 && (
-                     <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
-                      {alertCount > 9 ? '9+' : alertCount}
-                     </span>
+                    item.id === 'alerts' &&
+                    alertCount > 0 && (
+
+                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
+
+                      {alertCount > 9
+                        ? '9+'
+                        : alertCount}
+
+                    </span>
+
                   )}
 
                 </button>
 
               )
+
             })}
 
           </nav>
 
 
-          {/* Sidebar footer */}
+          {/* =================================================
+              SIDEBAR FOOTER
+          ================================================= */}
 
           {sidebarOpen && (
 
@@ -299,7 +364,10 @@ useEffect(() => {
 
         <main className="min-w-0 flex-1">
 
-          {/* Header */}
+
+          {/* =================================================
+              HEADER
+          ================================================= */}
 
           <header className="border-b border-slate-800 bg-slate-950 px-6 py-5">
 
@@ -342,7 +410,9 @@ useEffect(() => {
           </header>
 
 
-          {/* Page */}
+          {/* =================================================
+              PAGE CONTENT
+          ================================================= */}
 
           <section className="p-6">
 
@@ -355,45 +425,33 @@ useEffect(() => {
       </div>
 
     </div>
+
   )
+
 }
 
 
 /* =============================================================
    LOAD FORECAST PAGE
-   Uses the existing real Load Forecast API.
 ============================================================= */
-
-import {
-  loadForecastAPI,
-  type LoadForecast,
-} from './services/api'
-
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from 'recharts'
-
 
 const LoadForecastPage: React.FC = () => {
 
   const [data, setData] =
-    React.useState<LoadForecast | null>(null)
+    useState<LoadForecast | null>(null)
 
   const [loading, setLoading] =
-    React.useState(true)
+    useState(true)
 
   const [error, setError] =
-    React.useState<string | null>(null)
+    useState<string | null>(null)
 
 
-  React.useEffect(() => {
+  /* ===========================================================
+     FETCH FORECAST
+  =========================================================== */
+
+  useEffect(() => {
 
     let cancelled = false
 
@@ -447,6 +505,10 @@ const LoadForecastPage: React.FC = () => {
   }, [])
 
 
+  /* ===========================================================
+     LOADING
+  =========================================================== */
+
   if (loading) {
 
     return (
@@ -470,8 +532,13 @@ const LoadForecastPage: React.FC = () => {
       </div>
 
     )
+
   }
 
+
+  /* ===========================================================
+     ERROR
+  =========================================================== */
 
   if (error) {
 
@@ -495,6 +562,7 @@ const LoadForecastPage: React.FC = () => {
       </div>
 
     )
+
   }
 
 
@@ -503,17 +571,29 @@ const LoadForecastPage: React.FC = () => {
   }
 
 
+  /* ===========================================================
+     CHART DATA
+  =========================================================== */
+
   const chartData =
     data.hours.map(
       (period, index) => ({
+
         period,
+
         historical:
           data.historical[index] ?? null,
+
         predicted:
           data.predicted[index] ?? null,
+
       })
     )
 
+
+  /* ===========================================================
+     CONFIDENCE
+  =========================================================== */
 
   const averageConfidence =
     data.confidence.length > 0
@@ -524,11 +604,18 @@ const LoadForecastPage: React.FC = () => {
       : 0
 
 
+  /* ===========================================================
+     LOAD FORECAST UI
+  =========================================================== */
+
   return (
 
     <div className="space-y-6">
 
-      {/* Header */}
+
+      {/* =====================================================
+          HEADER
+      ===================================================== */}
 
       <div>
 
@@ -538,13 +625,15 @@ const LoadForecastPage: React.FC = () => {
 
         <p className="mt-1 text-sm text-slate-400">
           Monthly electricity-demand forecasting using the
-          trained Mawson Random Forest model
+          trained Mawson Gradient Boosting model
         </p>
 
       </div>
 
 
-      {/* Metrics */}
+      {/* =====================================================
+          METRICS
+      ===================================================== */}
 
       <div className="grid gap-4 md:grid-cols-3">
 
@@ -581,7 +670,9 @@ const LoadForecastPage: React.FC = () => {
       </div>
 
 
-      {/* Chart */}
+      {/* =====================================================
+          CHART
+      ===================================================== */}
 
       <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
 
@@ -656,7 +747,9 @@ const LoadForecastPage: React.FC = () => {
       </div>
 
 
-      {/* Model metrics */}
+      {/* =====================================================
+          MODEL METRICS
+      ===================================================== */}
 
       <div className="grid gap-4 md:grid-cols-4">
 
@@ -691,7 +784,9 @@ const LoadForecastPage: React.FC = () => {
       </div>
 
 
-      {/* Model info */}
+      {/* =====================================================
+          MODEL INFO
+      ===================================================== */}
 
       <div className="rounded-2xl border border-cyan-900 bg-cyan-950/20 p-5">
 
@@ -713,11 +808,12 @@ const LoadForecastPage: React.FC = () => {
     </div>
 
   )
+
 }
 
 
 /* =============================================================
-   SMALL COMPONENTS
+   METRIC BOX
 ============================================================= */
 
 const MetricBox: React.FC<{
@@ -747,5 +843,6 @@ const MetricBox: React.FC<{
   </div>
 
 )
+
 
 export default App

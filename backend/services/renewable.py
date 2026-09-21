@@ -6,20 +6,44 @@ import pandas as pd
 
 class RenewableService:
     """
-    Renewable resource potential service.
+    Renewable resource potential service for Antarctic research stations.
 
     IMPORTANT:
-    This service estimates solar/wind RESOURCE POTENTIAL.
-    It does not claim actual renewable electricity generation.
+    This service estimates renewable RESOURCE AVAILABILITY.
+    It does NOT represent actual renewable electricity generation.
 
-    For a date already available in the NASA daily dataset:
-        -> uses the actual NASA daily value.
+    Solar logic:
+    - Antarctica can have periods with very low or no usable solar resource.
+    - Solar is considered AVAILABLE only when daily solar radiation
+      is above the configured minimum threshold.
+    - When solar is below the threshold, solar potential is treated
+      as unavailable and the system relies on other resources such
+      as wind, battery and diesel backup.
 
-    For a future date:
-        -> uses historical day-of-year climatology as an estimate.
+    Wind is evaluated independently.
+
+    For dates already present in NASA data:
+        -> uses actual NASA daily observations.
+
+    For future dates:
+        -> uses historical day-of-year climatology.
     """
 
+    # ============================================================
+    # POLAR SOLAR AVAILABILITY THRESHOLD
+    # ============================================================
+
+    # Below this value, solar is treated as unavailable for
+    # practical station-level energy planning.
+    #
+    # Example:
+    # 2.775 kWh/m²/day -> SOLAR UNAVAILABLE
+    #
+    # Higher summer values can become available automatically.
+    SOLAR_MIN_RESOURCE = 3.0
+
     def __init__(self, models):
+
         self.models = models
 
         self.root = Path(__file__).resolve().parents[2]
@@ -41,7 +65,10 @@ class RenewableService:
             / "POWER_Point_Daily_windnew.csv"
         )
 
-        # Load daily NASA data once.
+        # ========================================================
+        # LOAD NASA DAILY DATA
+        # ========================================================
+
         self.solar_daily = self._load_nasa_daily(
             self.solar_file,
             "ALLSKY_SFC_SW_DWN",
@@ -54,7 +81,10 @@ class RenewableService:
             skiprows=9
         )
 
-        # Merge daily solar + wind
+        # ========================================================
+        # MERGE SOLAR + WIND
+        # ========================================================
+
         self.daily = self.solar_daily.merge(
             self.wind_daily,
             on="date",
@@ -67,7 +97,10 @@ class RenewableService:
             .reset_index(drop=True)
         )
 
-        # Historical distributions used for normalization.
+        # ========================================================
+        # HISTORICAL DISTRIBUTIONS
+        # ========================================================
+
         self.solar_distribution = (
             self.daily[
                 "ALLSKY_SFC_SW_DWN"
@@ -82,7 +115,10 @@ class RenewableService:
             .dropna()
         )
 
-        # Day-of-year climatology for future dates.
+        # ========================================================
+        # DAY-OF-YEAR CLIMATOLOGY
+        # ========================================================
+
         self.day_of_year_climatology = (
             self._build_day_of_year_climatology()
         )
@@ -143,6 +179,7 @@ class RenewableService:
             "DY",
             value_column
         ]:
+
             df[col] = pd.to_numeric(
                 df[col],
                 errors="coerce"
@@ -226,7 +263,11 @@ class RenewableService:
 
         if pd.isna(value):
 
-            return 50.0
+            return 0.0
+
+        if historical_values.empty:
+
+            return 0.0
 
         q20 = float(
             historical_values.quantile(0.20)
@@ -241,8 +282,13 @@ class RenewableService:
             return 50.0
 
         score = (
-            (float(value) - q20)
-            / (q80 - q20)
+            (
+                float(value) - q20
+            )
+            /
+            (
+                q80 - q20
+            )
         ) * 100
 
         return float(
@@ -252,6 +298,95 @@ class RenewableService:
                 100
             )
         )
+
+    # ============================================================
+    # SOLAR AVAILABILITY
+    # ============================================================
+
+    def _evaluate_solar(
+        self,
+        solar_value
+    ):
+
+        # No valid solar observation
+        if pd.isna(solar_value):
+
+            return {
+                "available": False,
+                "potential": 0.0,
+                "status": "UNAVAILABLE",
+                "reason": (
+                    "No usable solar resource "
+                    "is available for this period."
+                )
+            }
+
+        # Very low solar radiation
+        if (
+            float(solar_value)
+            < self.SOLAR_MIN_RESOURCE
+        ):
+
+            return {
+                "available": False,
+                "potential": 0.0,
+                "status": "UNAVAILABLE",
+                "reason": (
+                    "Solar radiation is below the "
+                    "minimum usable threshold for "
+                    "the Antarctic station."
+                )
+            }
+
+        # Solar is sufficiently available
+        solar_score = self._score(
+            solar_value,
+            self.solar_distribution
+        )
+
+        return {
+            "available": True,
+            "potential": round(
+                solar_score,
+                1
+            ),
+            "status": "AVAILABLE",
+            "reason": (
+                "Solar resource is sufficient "
+                "for renewable-energy planning."
+            )
+        }
+
+    # ============================================================
+    # WIND AVAILABILITY
+    # ============================================================
+
+    def _evaluate_wind(
+        self,
+        wind_value
+    ):
+
+        if pd.isna(wind_value):
+
+            return {
+                "available": False,
+                "potential": 0.0,
+                "status": "UNAVAILABLE"
+            }
+
+        wind_score = self._score(
+            wind_value,
+            self.wind_distribution
+        )
+
+        return {
+            "available": True,
+            "potential": round(
+                wind_score,
+                1
+            ),
+            "status": "AVAILABLE"
+        }
 
     # ============================================================
     # GET RESOURCE VALUES FOR A DATE
@@ -266,9 +401,9 @@ class RenewableService:
             requested_date
         ).normalize()
 
-        # --------------------------------------------------------
-        # First try actual NASA daily data
-        # --------------------------------------------------------
+        # ========================================================
+        # FIRST: ACTUAL NASA DAILY DATA
+        # ========================================================
 
         actual = self.daily[
             self.daily["date"] == date
@@ -286,7 +421,6 @@ class RenewableService:
                 "WS50M"
             ]
 
-            # If both are available, return actual NASA values.
             if (
                 pd.notna(solar_value)
                 or pd.notna(wind_value)
@@ -296,16 +430,18 @@ class RenewableService:
                     float(solar_value)
                     if pd.notna(solar_value)
                     else np.nan,
+
                     float(wind_value)
                     if pd.notna(wind_value)
                     else np.nan,
+
                     True
                 )
 
-        # --------------------------------------------------------
-        # Future date:
-        # Use historical day-of-year climatology.
-        # --------------------------------------------------------
+        # ========================================================
+        # FUTURE DATE:
+        # HISTORICAL DAY-OF-YEAR CLIMATOLOGY
+        # ========================================================
 
         month = int(
             date.month
@@ -331,9 +467,12 @@ class RenewableService:
             ]
         )
 
+        # ========================================================
+        # FALLBACK TO MONTHLY CLIMATOLOGY
+        # ========================================================
+
         if climatology_row.empty:
 
-            # Fallback to monthly climatology
             df = self.daily.copy()
 
             df["month"] = (
@@ -356,11 +495,17 @@ class RenewableService:
 
                 return (
                     float(
-                        row["ALLSKY_SFC_SW_DWN"]
+                        row[
+                            "ALLSKY_SFC_SW_DWN"
+                        ]
                     ),
+
                     float(
-                        row["WS50M"]
+                        row[
+                            "WS50M"
+                        ]
                     ),
+
                     False
                 )
 
@@ -368,28 +513,42 @@ class RenewableService:
                 float(
                     self.solar_distribution.mean()
                 ),
+
                 float(
                     self.wind_distribution.mean()
                 ),
+
                 False
             )
+
+        # ========================================================
+        # DAY-OF-YEAR ESTIMATE
+        # ========================================================
 
         row = climatology_row.iloc[0]
 
         return (
             float(
-                row["ALLSKY_SFC_SW_DWN"]
+                row[
+                    "ALLSKY_SFC_SW_DWN"
+                ]
             )
             if pd.notna(
-                row["ALLSKY_SFC_SW_DWN"]
+                row[
+                    "ALLSKY_SFC_SW_DWN"
+                ]
             )
             else np.nan,
 
             float(
-                row["WS50M"]
+                row[
+                    "WS50M"
+                ]
             )
             if pd.notna(
-                row["WS50M"]
+                row[
+                    "WS50M"
+                ]
             )
             else np.nan,
 
@@ -415,27 +574,86 @@ class RenewableService:
             )
         )
 
-        solar_score = self._score(
-            solar_value,
-            self.solar_distribution
+        # ========================================================
+        # EVALUATE SOLAR
+        # ========================================================
+
+        solar = self._evaluate_solar(
+            solar_value
         )
 
-        wind_score = self._score(
-            wind_value,
-            self.wind_distribution
+        # ========================================================
+        # EVALUATE WIND
+        # ========================================================
+
+        wind = self._evaluate_wind(
+            wind_value
         )
 
-        # Weighted renewable-resource score
-        renewable_index = (
-            0.60 * solar_score
-            + 0.40 * wind_score
+        solar_available = (
+            solar["available"]
         )
 
-        # --------------------------------------------------------
-        # Classify availability
-        # --------------------------------------------------------
+        wind_available = (
+            wind["available"]
+        )
 
-        if renewable_index >= 70:
+        # ========================================================
+        # RENEWABLE INDEX
+        # ========================================================
+
+        available_scores = []
+
+        if solar_available:
+
+            available_scores.append(
+                solar["potential"]
+            )
+
+        if wind_available:
+
+            available_scores.append(
+                wind["potential"]
+            )
+
+        if available_scores:
+
+            renewable_index = (
+                sum(available_scores)
+                /
+                len(available_scores)
+            )
+
+        else:
+
+            renewable_index = 0.0
+
+        # ========================================================
+        # STATUS
+        # ========================================================
+
+        if (
+            not solar_available
+            and not wind_available
+        ):
+
+            status = "LOW"
+
+        elif (
+            not solar_available
+            and wind_available
+        ):
+
+            status = "WIND-DEPENDENT"
+
+        elif (
+            solar_available
+            and not wind_available
+        ):
+
+            status = "SOLAR-DEPENDENT"
+
+        elif renewable_index >= 70:
 
             status = "HIGH"
 
@@ -447,33 +665,75 @@ class RenewableService:
 
             status = "LOW"
 
-        # --------------------------------------------------------
-        # Recommendation
-        # --------------------------------------------------------
+        # ========================================================
+        # RECOMMENDED ACTION
+        # ========================================================
 
-        if renewable_index >= 70:
+        if (
+            not solar_available
+            and wind_available
+        ):
 
             action = (
-                "Prioritize renewable-rich periods "
-                "for flexible loads and reduce "
-                "unnecessary generator dependence."
+                "Solar resource is currently "
+                "unavailable. Prioritize available "
+                "wind generation, use stored battery "
+                "energy when required, and retain "
+                "fuel as backup for critical loads."
+            )
+
+        elif (
+            not solar_available
+            and not wind_available
+        ):
+
+            action = (
+                "Solar and wind resources are currently "
+                "limited. Preserve battery energy, "
+                "prioritize essential loads, and "
+                "maintain sufficient generator fuel reserve."
+            )
+
+        elif (
+            solar_available
+            and not wind_available
+        ):
+
+            action = (
+                "Solar resource is available. "
+                "Prioritize solar utilization and "
+                "battery charging while retaining "
+                "fuel as backup."
+            )
+
+        elif renewable_index >= 70:
+
+            action = (
+                "Strong renewable conditions are available. "
+                "Prioritize renewable utilization and "
+                "battery charging while reducing "
+                "unnecessary generator use."
             )
 
         elif renewable_index < 40:
 
             action = (
-                "Conserve fuel and prioritize "
-                "essential loads because renewable "
-                "resource potential is limited."
+                "Renewable resource availability is limited. "
+                "Conserve fuel, preserve stored energy, "
+                "and prioritize essential loads."
             )
 
         else:
 
             action = (
-                "Maintain balanced renewable and "
-                "generator operation while monitoring "
-                "the next forecast period."
+                "Maintain balanced renewable and generator "
+                "operation while monitoring the next "
+                "forecast period."
             )
+
+        # ========================================================
+        # RETURN API RESPONSE
+        # ========================================================
 
         return {
 
@@ -482,36 +742,66 @@ class RenewableService:
             ),
 
             "solar": {
-                "value": round(
-                    solar_value,
-                    3
-                )
-                if not np.isnan(solar_value)
-                else None,
+
+                "value": (
+                    round(
+                        solar_value,
+                        3
+                    )
+                    if not np.isnan(
+                        solar_value
+                    )
+                    else None
+                ),
 
                 "unit": (
                     "kWh/m²/day"
                 ),
 
                 "potential": round(
-                    solar_score,
+                    solar["potential"],
                     1
+                ),
+
+                "available": (
+                    solar["available"]
+                ),
+
+                "status": (
+                    solar["status"]
+                ),
+
+                "reason": (
+                    solar["reason"]
                 )
             },
 
             "wind": {
-                "value": round(
-                    wind_value,
-                    3
-                )
-                if not np.isnan(wind_value)
-                else None,
+
+                "value": (
+                    round(
+                        wind_value,
+                        3
+                    )
+                    if not np.isnan(
+                        wind_value
+                    )
+                    else None
+                ),
 
                 "unit": "m/s",
 
                 "potential": round(
-                    wind_score,
+                    wind["potential"],
                     1
+                ),
+
+                "available": (
+                    wind["available"]
+                ),
+
+                "status": (
+                    wind["status"]
                 )
             },
 
@@ -530,16 +820,23 @@ class RenewableService:
                 else "Historical day-of-year estimate"
             ),
 
+            "solarThreshold": (
+                self.SOLAR_MIN_RESOURCE
+            ),
+
             "note": (
-                "Renewable potential is a normalized "
-                "resource-availability estimate. "
-                "It is not measured renewable "
-                "electricity generation."
+                "Renewable potential represents "
+                "resource availability, not measured "
+                "renewable electricity generation. "
+                "Solar is treated as unavailable when "
+                "solar radiation is below "
+                f"{self.SOLAR_MIN_RESOURCE} "
+                "kWh/m²/day."
             )
         }
 
     # ============================================================
-    # EXISTING 12-MONTH RENEWABLE PROFILE
+    # 12-MONTH RENEWABLE PROFILE
     # ============================================================
 
     def forecast(self):
@@ -561,8 +858,20 @@ class RenewableService:
         )
 
         labels = []
+
         solar_scores = []
+
         wind_scores = []
+
+        renewable_scores = []
+
+        solar_availability = []
+
+        wind_availability = []
+
+        # ========================================================
+        # MONTHLY CALCULATION
+        # ========================================================
 
         for month in range(1, 13):
 
@@ -588,28 +897,78 @@ class RenewableService:
                 ]
             )
 
+            # ----------------------------------------------------
+            # SOLAR
+            # ----------------------------------------------------
+
+            solar = self._evaluate_solar(
+                solar_value
+            )
+
+            # ----------------------------------------------------
+            # WIND
+            # ----------------------------------------------------
+
+            wind = self._evaluate_wind(
+                wind_value
+            )
+
             solar_scores.append(
-                self._score(
-                    solar_value,
-                    self.solar_distribution
-                )
+                solar["potential"]
             )
 
             wind_scores.append(
-                self._score(
-                    wind_value,
-                    self.wind_distribution
+                wind["potential"]
+            )
+
+            solar_availability.append(
+                solar["available"]
+            )
+
+            wind_availability.append(
+                wind["available"]
+            )
+
+            # ----------------------------------------------------
+            # RENEWABLE INDEX
+            # ----------------------------------------------------
+
+            available_scores = []
+
+            if solar["available"]:
+
+                available_scores.append(
+                    solar["potential"]
+                )
+
+            if wind["available"]:
+
+                available_scores.append(
+                    wind["potential"]
+                )
+
+            if available_scores:
+
+                renewable_index = (
+                    sum(available_scores)
+                    /
+                    len(available_scores)
+                )
+
+            else:
+
+                renewable_index = 0.0
+
+            renewable_scores.append(
+                round(
+                    renewable_index,
+                    1
                 )
             )
 
-        renewable_scores = [
-            0.60 * solar
-            + 0.40 * wind
-            for solar, wind in zip(
-                solar_scores,
-                wind_scores
-            )
-        ]
+        # ========================================================
+        # BEST RENEWABLE MONTH
+        # ========================================================
 
         best_index = int(
             np.argmax(
@@ -636,6 +995,14 @@ class RenewableService:
                 for v in renewable_scores
             ],
 
+            "solarAvailability": (
+                solar_availability
+            ),
+
+            "windAvailability": (
+                wind_availability
+            ),
+
             "predictedGeneration": round(
                 renewable_scores[0],
                 1
@@ -658,8 +1025,16 @@ class RenewableService:
                 "resource potential index"
             ),
 
+            "solarThreshold": (
+                self.SOLAR_MIN_RESOURCE
+            ),
+
             "note": (
                 "Estimated renewable resource "
-                "potential, not measured generation."
+                "potential, not measured generation. "
+                "Solar is marked unavailable when "
+                "resource availability is below "
+                f"{self.SOLAR_MIN_RESOURCE} "
+                "kWh/m²/day."
             )
         }

@@ -1,3 +1,4 @@
+import { addSystemAlert } from '../services/alertStore'
 import React, { useEffect, useState } from 'react'
 import {
   Fuel,
@@ -273,6 +274,37 @@ const Settings: React.FC = () => {
       setPlans(
         calculatedPlans
       )
+      calculatedPlans.forEach((plan) => {
+  const fuel =
+    plan.data.fuel.monthlyForecastLitres
+
+  const renewable =
+    plan.data.renewable.renewableIndex
+
+  if (fuel > 35000) {
+    addSystemAlert({
+      severity: 'WARNING',
+      message:
+        `${plan.month}: predicted fuel requirement is high at ${fuel.toFixed(0)} L/month. Fuel-conservation measures should be planned.`,
+    })
+  }
+
+  if (renewable < 40) {
+    addSystemAlert({
+      severity: 'WARNING',
+      message:
+        `${plan.month}: renewable potential is low (${renewable.toFixed(1)}/100). Preserve battery energy and fuel reserve.`,
+    })
+  }
+
+  if (renewable >= 70) {
+    addSystemAlert({
+      severity: 'INFO',
+      message:
+        `${plan.month}: strong renewable potential (${renewable.toFixed(1)}/100). Consider higher renewable utilization and battery charging.`,
+    })
+  }
+})
 
     } catch (err) {
 
@@ -930,7 +962,7 @@ const Settings: React.FC = () => {
           <LogicStep
             number="01"
             title="Forecast Fuel"
-            text="Random Forest estimates the monthly fuel requirement."
+            text="The trained fuel forecasting model estimates the monthly fuel requirement from historical Mawson energy and weather data."
           />
 
           <LogicStep
